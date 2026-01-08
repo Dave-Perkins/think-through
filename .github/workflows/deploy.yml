@@ -24,8 +24,11 @@ jobs:
             git fetch --all
             git reset --hard ${GITHUB_SHA}
 
-            # Ensure a project virtualenv exists (create with server python)
-            python3 -m venv venv || true
+            # Force-recreate a clean project virtualenv (avoid any checked-in venv)
+            if [ -d venv ]; then
+              mv venv venv.bak.$(date +%s) || true
+            fi
+            python3 -m venv venv
 
             # Use the venv's python -m pip to avoid relying on wrapper shebangs
             ./venv/bin/python -m pip install --upgrade pip setuptools wheel
