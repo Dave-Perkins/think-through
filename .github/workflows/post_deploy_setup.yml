@@ -1,0 +1,29 @@
+name: Post-deploy Setup
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Run post-deploy setup via SSH
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_KEY }}
+          port: 22
+          script: |
+            set -e
+            cd /home/deploy/think_through || exit 1
+            # Ensure the script is present and executable
+            if [ ! -f scripts/post_deploy_setup.sh ]; then
+              echo "post_deploy_setup.sh missing"; exit 1
+            fi
+            chmod +x scripts/post_deploy_setup.sh || true
+            ./scripts/post_deploy_setup.sh
+            echo "DONE"
