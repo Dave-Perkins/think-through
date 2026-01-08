@@ -1,14 +1,18 @@
 import os
+import urllib.parse
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev-secret-for-local')
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY') or os.environ.get('SECRET_KEY') or 'dev-secret-for-local'
 
-DEBUG = True
+# Default to False in production unless explicitly enabled
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False').lower() in ('1', 'true', 'yes')
 
-ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS can be a comma-separated env var
+allowed = os.environ.get('ALLOWED_HOSTS', '*')
+ALLOWED_HOSTS = [h.strip() for h in allowed.split(',') if h.strip()]
 
 # Application definition
 INSTALLED_APPS = [
@@ -51,13 +55,34 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'think_through.wsgi.application'
 
-# Use SQLite for simple development
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Database configuration: prefer DATABASE_URL if present, otherwise fall back to SQLite
+DATABASES = {}
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    parsed = urllib.parse.urlparse(database_url)
+    # postgres://user:pass@host:port/dbname
+    db_engine = 'django.db.backends.postgresql'
+    db_name = parsed.path.lstrip('/')
+    db_user = urllib.parse.unquote(parsed.username) if parsed.username else ''
+    db_pass = urllib.parse.unquote(parsed.password) if parsed.password else ''
+    db_host = parsed.hostname or ''
+    db_port = parsed.port or ''
+
+    DATABASES['default'] = {
+        'ENGINE': db_engine,
+        'NAME': db_name,
+        'USER': db_user,
+        'PASSWORD': db_pass,
+        'HOST': db_host,
+        'PORT': db_port,
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = []
 
