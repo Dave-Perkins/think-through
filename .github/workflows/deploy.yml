@@ -23,12 +23,21 @@ jobs:
             cd /home/deploy/think_through || exit 1
             git fetch --all
             git reset --hard ${GITHUB_SHA}
-            if [ -f venv/bin/activate ]; then
-              source venv/bin/activate
+
+            # Create a project virtualenv if it doesn't exist
+            if [ ! -d venv ]; then
+              python3 -m venv venv
             fi
+
+            # Use the venv's pip/python to install and run management commands
+            ./venv/bin/pip install --upgrade pip setuptools wheel
             if [ -f requirements.txt ]; then
-              pip install --upgrade pip && pip install -r requirements.txt
+              ./venv/bin/pip install -r requirements.txt
             fi
-            python manage.py migrate --noinput
-            python manage.py collectstatic --noinput
-            sudo systemctl restart think_through
+
+            ./venv/bin/python manage.py migrate --noinput
+            ./venv/bin/python manage.py collectstatic --noinput
+
+            # Restart the service (deploy user should have passwordless systemctl for this unit)
+            sudo -n systemctl daemon-reload || true
+            sudo -n systemctl restart think_through
