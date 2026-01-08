@@ -28,13 +28,25 @@ def deploy_test(request):
     # hostname
     host = socket.gethostname()
 
-    # git SHA (best-effort)
+    # git SHA (best-effort): prefer an atomic file written at deploy-time, fall back to git
     git_sha = None
     try:
         repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        git_sha = subprocess.check_output(
-            ['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir, stderr=subprocess.DEVNULL
-        ).decode().strip()
+        sha_file = os.path.join(repo_dir, '.GIT_SHA')
+        if os.path.exists(sha_file):
+            try:
+                with open(sha_file, 'r') as f:
+                    val = f.read().strip()
+                    if val:
+                        git_sha = val
+            except Exception:
+                git_sha = None
+
+        # fallback to reading from git if no file present
+        if not git_sha:
+            git_sha = subprocess.check_output(
+                ['git', 'rev-parse', '--short', 'HEAD'], cwd=repo_dir, stderr=subprocess.DEVNULL
+            ).decode().strip()
     except Exception:
         git_sha = None
 

@@ -39,6 +39,10 @@ jobs:
             ./venv/bin/python manage.py migrate --noinput
             ./venv/bin/python manage.py collectstatic --noinput
 
+            # Atomically record the deployed Git SHA so the app can report it
+            # Write to a temporary file and move into place to avoid partial writes
+            echo -n "${GITHUB_SHA}" > .GIT_SHA.tmp && mv .GIT_SHA.tmp .GIT_SHA || true
+
             # Restart the service (deploy user should have passwordless systemctl for this unit)
             sudo -n systemctl daemon-reload || true
             sudo -n systemctl restart think_through
