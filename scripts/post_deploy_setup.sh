@@ -79,20 +79,20 @@ if [ ! -f "$SSL_DIR/privkey.pem" ] || [ ! -f "$SSL_DIR/fullchain.pem" ]; then
   chown deploy:deploy "$SSL_DIR"/* || true
 fi
 
-# configure nginx site for IP TLS
+# configure nginx site for IP TLS (write using sudo + tee to avoid shell expansion)
 NG_AVAIL=/etc/nginx/sites-available/think_through_ip
 NG_ENABLED=/etc/nginx/sites-enabled/think_through_ip
 if [ -d /etc/nginx/sites-available ]; then
   if [ ! -f "$NG_AVAIL" ]; then
     sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak 2>/dev/null || true
-    sudo bash -c "cat > $NG_AVAIL <<'NG'
+    sudo tee "$NG_AVAIL" > /dev/null <<'NG'
 server {
     listen 443 ssl default_server;
     listen [::]:443 ssl default_server;
     server_name _;
 
-    ssl_certificate $REPO_DIR/ssl/fullchain.pem;
-    ssl_certificate_key $REPO_DIR/ssl/privkey.pem;
+    ssl_certificate /home/deploy/think_through/ssl/fullchain.pem;
+    ssl_certificate_key /home/deploy/think_through/ssl/privkey.pem;
 
     location / {
         proxy_pass http://unix:/run/think_through.sock;
@@ -102,7 +102,7 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
-NG"
+NG
     sudo ln -sf "$NG_AVAIL" "$NG_ENABLED" || true
     sudo nginx -t || true
     sudo systemctl reload nginx || true
