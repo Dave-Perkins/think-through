@@ -24,15 +24,13 @@ jobs:
             git fetch --all
             git reset --hard ${GITHUB_SHA}
 
-            # Create a project virtualenv if it doesn't exist
-            if [ ! -d venv ]; then
-              python3 -m venv venv
-            fi
+            # Ensure a project virtualenv exists (create with server python)
+            python3 -m venv venv || true
 
-            # Use the venv's pip/python to install and run management commands
-            ./venv/bin/pip install --upgrade pip setuptools wheel
+            # Use the venv's python -m pip to avoid relying on wrapper shebangs
+            ./venv/bin/python -m pip install --upgrade pip setuptools wheel
             if [ -f requirements.txt ]; then
-              ./venv/bin/pip install -r requirements.txt
+              ./venv/bin/python -m pip install -r requirements.txt
             fi
 
             ./venv/bin/python manage.py migrate --noinput
