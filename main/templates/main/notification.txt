@@ -1,0 +1,10 @@
+Title: {{ title }}
+Author: {{ author_name }}
+Date: {{ created_at }}
+
+{{ summary }}
+
+Link: {{ url }}
+
+--
+Think Through
