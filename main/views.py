@@ -1,8 +1,12 @@
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, HttpResponseBadRequest
+from django.template.loader import render_to_string
+from django.core.mail import EmailMultiAlternatives
+from django.conf import settings
 import os
 import socket
 import subprocess
 from datetime import datetime
+import json
 
 
 def index(request):
@@ -74,3 +78,62 @@ def deploy_test(request):
         'git_sha_short': git_sha_short,
     }
     return JsonResponse(payload)
+
+
+def send_notification(request):
+    """POST endpoint that accepts JSON payload and sends a templated email.
+
+    Expected JSON fields (MVP):
+    - title (string)
+    - summary (string)
+    - author_name (string)
+    - created_at (ISO timestamp string)
+    - url (string)
+
+    The endpoint sends to `settings.NOTIFICATION_EMAILS` (env-driven). Returns 202 on success.
+    """
+    if request.method != 'POST':
+        return HttpResponseBadRequest('POST required')
+
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except Exception:
+        return HttpResponseBadRequest('Invalid JSON')
+
+    required = ['title', 'summary', 'author_name', 'created_at', 'url']
+    missing = [f for f in required if not payload.get(f)]
+    if missing:
+        return HttpResponseBadRequest('Missing fields: ' + ','.join(missing))
+
+    subject = f"Think Through: {payload.get('title')[:78]}"
+    context = {
+        'title': payload.get('title'),
+        'summary': payload.get('summary'),
+        'author_name': payload.get('author_name'),
+        'created_at': payload.get('created_at'),
+        'url': payload.get('url'),
+    }
+
+    # Render templates
+    text_body = render_to_string('main/notification.txt', context)
+    try:
+        html_body = render_to_string('main/notification.html', context)
+    except Exception:
+        html_body = None
+
+    recipients = getattr(settings, 'NOTIFICATION_EMAILS', [])
+    if not recipients:
+        return HttpResponseBadRequest('No recipients configured')
+
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None)
+
+    msg = EmailMultiAlternatives(subject=subject, body=text_body, from_email=from_email, to=recipients)
+    if html_body:
+        msg.attach_alternative(html_body, 'text/html')
+
+    try:
+        msg.send()
+    except Exception as exc:
+        return HttpResponse(status=500, content=f'Failed to send email: {exc}')
+
+    return HttpResponse(status=202)
