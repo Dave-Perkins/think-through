@@ -36,6 +36,37 @@ jobs:
               ./venv/bin/python -m pip install -r requirements.txt
             fi
 
+            # Ensure runtime environment file contains required secrets/flags
+            # - Generate a SECRET_KEY if missing
+            # - Ensure DJANGO_DEBUG is set to False
+            # - Ensure ALLOWED_HOSTS contains the Floating IP (used during development)
+            FLOATING_IP=161.35.248.143
+            if [ ! -f .env ] || ! grep -q '^SECRET_KEY=' .env; then
+              SECRET_KEY="$(./venv/bin/python - <<'PY'
+import secrets
+print(secrets.token_urlsafe(50))
+PY
+)"
+              printf 'SECRET_KEY=%s\n' "$SECRET_KEY" >> .env
+            fi
+
+            if ! grep -q '^DJANGO_DEBUG=' .env; then
+              printf 'DJANGO_DEBUG=False\n' >> .env
+            else
+              sed -i.bak -E "s/^DJANGO_DEBUG=.*/DJANGO_DEBUG=False/" .env || true
+            fi
+
+            if ! grep -q '^ALLOWED_HOSTS=' .env; then
+              printf 'ALLOWED_HOSTS=%s\n' "$FLOATING_IP" >> .env
+            else
+              if ! grep -q "$FLOATING_IP" .env; then
+                sed -i.bak -E "s/^(ALLOWED_HOSTS=)(.*)/\1\2,$FLOATING_IP/" .env || true
+              fi
+            fi
+
+            chmod 600 .env || true
+
+            # Run Django maintenance commands
             ./venv/bin/python manage.py migrate --noinput
             ./venv/bin/python manage.py collectstatic --noinput
 
@@ -46,3 +77,81 @@ jobs:
             # Restart the service (deploy user should have passwordless systemctl for this unit)
             sudo -n systemctl daemon-reload || true
             sudo -n systemctl restart think_through
+
+            # --- Post-deploy server setup: backups, basic monitoring, and IP TLS ---
+            echo "--- VERIFICATION: /home/deploy/think_through/.env (redacted) ---"
+            sed -n '1,200p' .env 2>/dev/null || true
+
+            # Create directories for scripts/logs/backups/ssl
+            mkdir -p scripts logs backups ssl
+            chmod 700 scripts || true
+
+            # Write a simple pg_dump backup script (uses DATABASE_URL from .env)
+            cat > scripts/pg_backup.sh <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+DIR=$(dirname "$0")/..
+cd "$DIR"
+source .env || true
+# Expect DATABASE_URL like: postgres://user:pass@host:port/dbname
+if [ -z "${DATABASE_URL:-}" ]; then
+  echo "DATABASE_URL not set, exiting"
+  exit 1
+fi
+# extract user/pass/host/port/db
+proto_removed=${DATABASE_URL#*://}
+USER_PASS=${proto_removed%%@*}
+HOST_DB=${proto_removed#*@}
+USER=${USER_PASS%%:*}
+PASS=${USER_PASS#*:}
+HOST=${HOST_DB%%/*}
+DB=${HOST_DB#*/}
+PGPASSWORD="$PASS" pg_dump -Fc -h "${HOST%%:*}" -p "${HOST#*:}" -U "$USER" "$DB" -f backups/$(date +"%Y%m%dT%H%M%SZ").dump
+find backups -type f -mtime +7 -name '*.dump' -delete || true
+echo "Backup complete: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+SH
+            chmod +x scripts/pg_backup.sh
+
+            # Install a crontab entry for deploy user to run backup daily at 03:00 UTC
+            (crontab -l 2>/dev/null || true; echo "0 3 * * * /home/deploy/think_through/scripts/pg_backup.sh >> /home/deploy/think_through/logs/pg_backup.log 2>&1") | crontab -
+
+            # Create a self-signed cert for the Floating IP (development only)
+            SSL_DIR=ssl
+            if [ ! -f "$SSL_DIR/privkey.pem" ] || [ ! -f "$SSL_DIR/fullchain.pem" ]; then
+              openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
+                -keyout "$SSL_DIR/privkey.pem" -out "$SSL_DIR/fullchain.pem" \
+                -subj "/CN=${FLOATING_IP}" || true
+              chmod 640 "$SSL_DIR"/* || true
+            fi
+
+            # Attempt to add an nginx site for TLS on the IP (back up existing files first)
+            if [ -d /etc/nginx/sites-available ]; then
+              NG_AVAIL=/etc/nginx/sites-available/think_through_ip
+              NG_ENABLED=/etc/nginx/sites-enabled/think_through_ip
+              if [ ! -f "$NG_AVAIL" ]; then
+                sudo -n bash -c 'cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.bak || true'
+                sudo -n bash -c 'cat > /etc/nginx/sites-available/think_through_ip <<"NG"
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+
+    ssl_certificate /home/deploy/think_through/ssl/fullchain.pem;
+    ssl_certificate_key /home/deploy/think_through/ssl/privkey.pem;
+
+    location / {
+        proxy_pass http://unix:/run/think_through.sock;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+NG'
+                sudo -n ln -sf "$NG_AVAIL" "$NG_ENABLED" || true
+                sudo -n nginx -t || true
+                sudo -n systemctl reload nginx || true
+              fi
+            fi
+
+            echo "--- POST-DEPLOY SETUP COMPLETE ---"
